@@ -41,6 +41,9 @@ extern "C" {
 // Meteor LED Task Events
 #define METEOR_LED_EVT          0x0080
 
+// Breathing LED Task Events
+#define BREATH_LED_EVT          0x0100
+
 // Simple Profile Service UUID
 #define SIMPLEPROFILE_SERV_UUID     0xFFE0
 /*********************************************************************

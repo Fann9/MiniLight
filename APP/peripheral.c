@@ -75,6 +75,21 @@ typedef struct {
 
 static meteor_led_state_t meteor_state;
 
+// 呼吸灯状态结构
+typedef struct {
+    uint8_t led_num;     // LED数量
+    uint8_t cycle;       // 呼吸周期（单位：100ms）
+    uint8_t r;           // 红色分量
+    uint8_t g;           // 绿色分量
+    uint8_t b;           // 蓝色分量
+    uint8_t mode;        // 呼吸模式（0=线性，1=指数）
+    uint16_t brightness; // 当前亮度（0-1000）
+    int16_t direction;   // 亮度变化方向（1=增加，-1=减少）
+    bool active;         // 是否激活
+} breath_led_state_t;
+
+static breath_led_state_t breath_state;
+
 
 //
 static uint8_t to_test_buffer[BLE_BUFF_MAX_LEN - 4 - 3];
@@ -328,6 +343,46 @@ void PERSON_BLE_UART_DATA_HANDLE(uint8_t *data, uint16_t length)
             UART1_SendString("Meteor LED command received\r\n", sizeof("Meteor LED command received\r\n"));
         }
     }
+    // 呼吸灯协议处理
+    else if(length >= 8 && data[0] == 0xEE && data[7] == 0xCF) // 呼吸灯协议：EE XX CC RR GG BB MM CF
+    {
+        // 解析呼吸灯协议数据
+        uint8_t led_num = data[1];
+        uint8_t cycle = data[2];
+        uint8_t r = data[3];
+        uint8_t g = data[4];
+        uint8_t b = data[5];
+        uint8_t mode = data[6]; // 呼吸模式（0=线性，1=指数）
+
+        // 检查是否为停止指令（LED数量为0）
+        if(led_num == 0)
+        {
+            // 停止呼吸灯
+            breath_state.active = FALSE;
+            // 关闭所有LED
+            ws2812_off_all();
+            UART1_SendString("Breath LED stopped\r\n", sizeof("Breath LED stopped\r\n"));
+        }
+        else
+        {
+            // 存储呼吸灯参数
+            breath_state.led_num = led_num;
+            breath_state.cycle = cycle;
+            breath_state.r = r;
+            breath_state.g = g;
+            breath_state.b = b;
+            breath_state.mode = mode;
+            breath_state.brightness = 0;
+            breath_state.direction = 1; // 从暗到亮
+            breath_state.active = TRUE;
+
+            // 触发呼吸灯控制事件
+            tmos_start_task(Peripheral_TaskID, BREATH_LED_EVT, 0);
+
+            // 发送响应
+            UART1_SendString("Breath LED command received\r\n", sizeof("Breath LED command received\r\n"));
+        }
+    }
 
 }
 
@@ -558,8 +613,7 @@ void Peripheral_Init()
 
     // Register receive scan request callback
     GAPRole_BroadcasterSetCB(&Broadcaster_BroadcasterCBs);
-
-    // 初始化流星灯默认参数（上电启动效果）
+        // 初始化流星灯默认参数（上电启动效果）
     // TODO: 修复蓝牙发送无法点亮的问题
     // EE20020308FF66FF00BF蓝牙发送无法点亮 (测试发现，当红色为0xff时，无法点亮)
     // meteor_state.led_num = 10;      // 默认10个LED
@@ -572,9 +626,23 @@ void Peripheral_Init()
     // meteor_state.direction = 0;      // 从左到右
     // meteor_state.position = 0;       // 起始位置
     // meteor_state.active = TRUE;      // 激活
-
+    
     // 触发流星灯控制事件
     tmos_start_task(Peripheral_TaskID, METEOR_LED_EVT, 1000); // 延时1秒启动，确保系统初始化完成
+
+    // 初始化呼吸灯默认参数（上电启动效果）
+    breath_state.led_num = 10;      // 默认10个LED
+    breath_state.cycle = 10;        // 呼吸周期1秒
+    breath_state.r = 0x00;          // 红色
+    breath_state.g = 0xff;          // 绿色
+    breath_state.b = 0x00;          // 蓝色
+    breath_state.mode = 0;          // 线性模式
+    breath_state.brightness = 0;    // 初始亮度
+    breath_state.direction = 1;     // 从暗到亮
+    breath_state.active = TRUE;     // 激活
+
+    // 触发呼吸灯控制事件
+    tmos_start_task(Peripheral_TaskID, BREATH_LED_EVT, 1000); // 延时1秒启动，确保系统初始化完成
 
     // Setup a delayed profile startup
     tmos_set_event(Peripheral_TaskID, SBP_START_DEVICE_EVT);
@@ -1011,6 +1079,80 @@ uint16 Peripheral_ProcessEvent(uint8 task_id, uint16 events)
         }
 
         return (events ^ METEOR_LED_EVT);
+    }
+
+    if(events & BREATH_LED_EVT)
+    {
+        // 处理呼吸灯控制事件
+        UINT32 irq_status;
+        SYS_DisableAllIrq(&irq_status);
+        breath_led_state_t current_state = breath_state;
+        SYS_RecoverIrq(irq_status);
+
+        // 呼吸灯效果
+        if(current_state.active && current_state.led_num > 0)
+        {
+            // 1. 更新亮度
+            if(current_state.direction == 1) // 亮度增加
+            {
+                current_state.brightness += 50; // 增加步长，使变化更明显
+                if(current_state.brightness >= 1000)
+                {
+                    current_state.brightness = 1000;
+                    current_state.direction = -1; // 切换为减少
+                }
+            }
+            else // 亮度减少
+            {
+                current_state.brightness -= 50; // 增加步长
+                if(current_state.brightness <= 0)
+                {
+                    current_state.brightness = 0;
+                    current_state.direction = 1; // 切换为增加
+                }
+            }
+
+            // 2. 计算当前亮度的颜色
+            uint16_t bright = current_state.brightness;
+            uint8_t r = (current_state.r * bright) / 1000;
+            uint8_t g = (current_state.g * bright) / 1000;
+            uint8_t b = (current_state.b * bright) / 1000;
+
+            // 3. 填充颜色数据
+            for(uint32_t i=0; i<current_state.led_num; i++)
+            {
+                ws2812_set_rgb(&ws2812_buf[i], r, g, b);
+            }
+
+            // 4. 发送数据
+            SPI0_MasterDMATrans((uint8_t *)ws2812_buf, 12 * current_state.led_num);
+
+            // 5. 发送调试信息
+            char debug_msg[100];
+            sprintf(debug_msg, "Breath: Bright=%d, R=%d, G=%d, B=%d, Dir=%d\r\n", 
+                    current_state.brightness, r, g, b, current_state.direction);
+            UART1_SendString(debug_msg, strlen(debug_msg));
+
+            // 6. 更新状态
+            SYS_DisableAllIrq(&irq_status);
+            breath_state = current_state;
+            SYS_RecoverIrq(irq_status);
+
+            // 7. 设置下一次事件
+            if(breath_state.active)
+            {
+                // 使用协议中指定的周期，确保周期设置生效
+                uint16_t interval = current_state.cycle * 100;
+                // 确保间隔在合理范围内（100ms - 5s）
+                if(interval < 100)
+                    interval = 100;
+                else if(interval > 5000)
+                    interval = 5000;
+                tmos_start_task(Peripheral_TaskID, BREATH_LED_EVT, interval);
+            }
+        }
+
+        return (events ^ BREATH_LED_EVT);
     }
 
     // Discard unknown events

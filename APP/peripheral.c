@@ -632,7 +632,7 @@ void Peripheral_Init()
 
     // 初始化呼吸灯默认参数（上电启动效果）
     breath_state.led_num = 10;      // 默认10个LED
-    breath_state.cycle = 10;        // 呼吸周期1秒
+    breath_state.cycle = 0xff;        // 呼吸周期1秒
     breath_state.r = 0x00;          // 红色
     breath_state.g = 0xff;          // 绿色
     breath_state.b = 0x00;          // 蓝色
@@ -918,48 +918,7 @@ uint16 Peripheral_ProcessEvent(uint8 task_id, uint16 events)
                                 }
                                 SPI0_MasterDMATrans((uint8_t *)ws2812_buf, 12*ws2812_led_num);
                             }
-                            break;
-                        // TODO: 流水灯模式
-                        // case 0x02: // 流水灯模式
-                        // {
-                        //     // 参数为速度
-                        //     uint8_t speed = new_protocol_data.param;
-                        //     // 简单实现：依次点亮LED
-                        //     for(uint32_t i=0; i<ws2812_led_num; i++) {
-                        //         // 关闭所有LED
-                        //         ws2812_off_all();
-                        //         // 点亮当前LED
-                        //         ws2812_set_rgb(&ws2812_buf[i], 0xff, 0xff, 0);
-                        //         SPI0_MasterDMATrans((uint8_t *)ws2812_buf, 12*ws2812_led_num);
-                        //         // 延时
-                        //         for(uint32_t j=0; j<speed*1000; j++);
-                        //     }
-                        //     // 最后关闭所有LED
-                        //     ws2812_off_all();
-                        // }
-                        // break;
-                        // TODO: 呼吸灯模式
-                        // case 0x03: // 呼吸灯模式
-                        // {
-                        //     // 参数为呼吸频率
-                        //     uint8_t freq = new_protocol_data.param;
-                        //     // 简单实现：亮度渐变
-                        //     for(uint8_t brightness=0; brightness<255; brightness+=10) {
-                        //         for(uint32_t i=0; i<ws2812_led_num; i++) {
-                        //             ws2812_set_rgb(&ws2812_buf[i], brightness, brightness, brightness);
-                        //         }
-                        //         SPI0_MasterDMATrans((uint8_t *)ws2812_buf, 12*ws2812_led_num);
-                        //         for(uint32_t j=0; j<freq*100; j++);
-                        //     }
-                        //     for(uint8_t brightness=255; brightness>0; brightness-=10) {
-                        //         for(uint32_t i=0; i<ws2812_led_num; i++) {
-                        //             ws2812_set_rgb(&ws2812_buf[i], brightness, brightness, brightness);
-                        //         }
-                        //         SPI0_MasterDMATrans((uint8_t *)ws2812_buf, 12*ws2812_led_num);
-                        //         for(uint32_t j=0; j<freq*100; j++);
-                        //     }
-                        // }
-                        // break;
+                            break;                        
                         default:
                             // 未知模式
                             break;
@@ -1141,22 +1100,26 @@ uint16 Peripheral_ProcessEvent(uint8 task_id, uint16 events)
             // 7. 设置下一次事件
             if(breath_state.active)
             {
-                // 计算事件间隔，让用户传入的参数直接对应完整呼吸周期
+                // 计算事件间隔，让00-FF映射到500ms-10000ms的范围
                 // 完整周期 = 40 × 事件间隔（从暗到亮再到暗需要40次事件）
                 // 所以事件间隔 = 周期 / 40
-                uint16_t total_cycle = current_state.cycle * 100; // 用户指定的总周期（ms）
+                uint16_t total_cycle;
                 uint16_t interval;
                 
-                // 确保总周期在合理范围内（200ms - 10s）
-                if(total_cycle < 200)
-                    total_cycle = 200;
+                // 映射00-FF到500ms-10000ms
+                // 计算公式：500 + (cycle * 9500 / 255)
+                total_cycle = 500 + (current_state.cycle * 9500) / 255;
+                
+                // 确保总周期在合理范围内（500ms - 10s）
+                if(total_cycle < 500)
+                    total_cycle = 500;
                 else if(total_cycle > 10000)
                     total_cycle = 10000;
                 
                 // 计算事件间隔
                 interval = total_cycle / 40;
-                if(interval < 5) // 最小间隔5ms
-                    interval = 5;
+                if(interval < 13) // 最小间隔13ms（对应500ms周期）
+                    interval = 13;
                 
                 tmos_start_task(Peripheral_TaskID, BREATH_LED_EVT, interval);
             }

@@ -1141,13 +1141,23 @@ uint16 Peripheral_ProcessEvent(uint8 task_id, uint16 events)
             // 7. 设置下一次事件
             if(breath_state.active)
             {
-                // 使用协议中指定的周期，确保周期设置生效
-                uint16_t interval = current_state.cycle * 100;
-                // 确保间隔在合理范围内（100ms - 5s）
-                if(interval < 100)
-                    interval = 100;
-                else if(interval > 5000)
-                    interval = 5000;
+                // 计算事件间隔，让用户传入的参数直接对应完整呼吸周期
+                // 完整周期 = 40 × 事件间隔（从暗到亮再到暗需要40次事件）
+                // 所以事件间隔 = 周期 / 40
+                uint16_t total_cycle = current_state.cycle * 100; // 用户指定的总周期（ms）
+                uint16_t interval;
+                
+                // 确保总周期在合理范围内（200ms - 10s）
+                if(total_cycle < 200)
+                    total_cycle = 200;
+                else if(total_cycle > 10000)
+                    total_cycle = 10000;
+                
+                // 计算事件间隔
+                interval = total_cycle / 40;
+                if(interval < 5) // 最小间隔5ms
+                    interval = 5;
+                
                 tmos_start_task(Peripheral_TaskID, BREATH_LED_EVT, interval);
             }
         }
